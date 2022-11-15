@@ -16,6 +16,7 @@ void main() {
 
 class App extends StatelessWidget {
   final Future<FirebaseApp> _initialization = Firebase.initializeApp();
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
@@ -73,7 +74,9 @@ class _RandomWordsState extends State<RandomWords> {
   final _localSaved = <WordPair>{};
   var _cloudSaved = <WordPair>{};
   final _biggerFont = const TextStyle(fontSize: 18);
+  SnappingSheetController sheetController = SnappingSheetController();
   var user;
+  var canBeDragged = true;
 
   Widget _buildRow(WordPair pair) {
     final alreadySaved = _localSaved.contains(pair) || (user.isAuthenticated && _cloudSaved.contains(pair));
@@ -139,6 +142,7 @@ class _RandomWordsState extends State<RandomWords> {
     return toDelete;
   }
 
+  
   void _pushSaved() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -218,6 +222,77 @@ class _RandomWordsState extends State<RandomWords> {
     await user.signOut();
   }
 
+  Container _displayPersonalInfo(){
+    return Container(
+      color: Colors.white,
+      height: 50,
+      child: ListView(
+          physics: const NeverScrollableScrollPhysics(),
+          children: [
+            Column(children: [
+              Container(
+                padding: const EdgeInsets.all(9.0),
+                height: 58,
+                color: Color(0xFFBDBDBD),
+                child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Welcome back, " + user.getEmail(), style: TextStyle(fontSize: 16)),
+                      Icon(Icons.arrow_drop_up)
+                    ]),
+              ),
+              const Padding(padding: EdgeInsets.all(5)),
+              Row(children: [
+                const Padding(padding: EdgeInsets.all(5)),
+                FutureBuilder(
+                  future: user.downloadImage(),
+                  builder: (BuildContext context, AsyncSnapshot<String> snapshot) {
+                    return CircleAvatar(
+                      radius: 50.0,
+                      backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.purple,
+                      backgroundImage: snapshot.data != null ? NetworkImage(snapshot.data.toString()): null
+                    );
+                  },
+                ),
+                const Padding(padding: EdgeInsets.all(5)),
+                Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Text(user.getEmail(), style: const TextStyle(fontSize: 20)),
+                      const Padding(padding: EdgeInsets.all(4)),
+                      Container(
+                        width: 160,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            FilePickerResult? result = await FilePicker.platform.pickFiles(
+                              type: FileType.custom,
+                              allowedExtensions: ['png', 'jpg', 'gif', 'bmp', 'jpeg', 'webp'],
+                            );
+                            File file;
+                            if (result != null) {
+                              file = File(result.files.single.path.toString());
+                              user.uploadImage(file);
+                            } else {
+                              const snackBar = SnackBar(content: Text("No image selected"));
+                              ScaffoldMessenger.of(context).showSnackBar(snackBar);
+                            }
+                          },
+                          child: const Text('change avatar'),
+                          style: ElevatedButton.styleFrom(
+                            primary: Colors.blue,
+                            onPrimary: Colors.white,
+                          ),
+                        ),
+                      )
+                      ,
+                    ])
+              ]),
+            ]),
+          ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     user = Provider.of<AuthRepository>(context);
@@ -226,6 +301,68 @@ class _RandomWordsState extends State<RandomWords> {
       _cloudSaved = user.getSaved();
     }
 
+    GestureDetector _homeScreen(){
+      return GestureDetector(
+          child: SnappingSheet(
+            controller: sheetController,
+            lockOverflowDrag: true,
+            snappingPositions: [
+              SnappingPosition.factor(
+                positionFactor: 0.8,
+                snappingCurve: Curves.easeOutExpo,
+                snappingDuration: Duration(seconds: 1),
+                grabbingContentOffset: GrabbingContentOffset.top,
+              ),
+              SnappingPosition.pixels(
+                positionPixels: 200,
+                snappingCurve: Curves.elasticOut,
+                snappingDuration: Duration(milliseconds: 1750),
+              ),
+            ],
+            child: Stack(
+              fit: StackFit.expand,
+              children: [_buildSuggestions(), !canBeDragged? Container() :
+              Container(
+                child: ClipRect(
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 5.0,sigmaY: 5.0),
+                      child: Container(
+                        width: double.infinity,
+                        height: double.infinity,
+                        decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.6)
+                        ),
+                      ),
+                    )
+                ),)
+              ],
+            ),
+            sheetBelow: SnappingSheetContent(
+              draggable: canBeDragged,
+              child: _displayPersonalInfo(),
+              //heightBehavior: SnappingSheetHeight.fit(),
+            ),
+
+          ),
+          onTap: () => {
+            setState(() {
+              if (canBeDragged) {
+                canBeDragged = false;
+                sheetController.snapToPosition(
+                    const SnappingPosition.factor(
+                        positionFactor: 0.083,
+                        snappingCurve: Curves.easeInBack,
+                        snappingDuration: Duration(milliseconds: 1)));
+              } else {
+                canBeDragged = true;
+                sheetController
+                    .snapToPosition(const SnappingPosition.factor(
+              positionFactor: 0.265,
+                ));
+              }
+            })
+          });
+    }
     return Scaffold (
       appBar: AppBar(
         title: const Text('Startup Name Generator', style: TextStyle(color: Colors.white)),
@@ -245,10 +382,9 @@ class _RandomWordsState extends State<RandomWords> {
           ),
         ],
       ),
-      body: _buildSuggestions(),
+      body: user.isAuthenticated? _homeScreen() : _buildSuggestions(),
     );
   }
-
 }
 
 class LoginScreen extends StatefulWidget{
@@ -264,6 +400,53 @@ class _LoginScreenState extends State<LoginScreen>{
     final user = Provider.of<AuthRepository>(context);
     var _email = TextEditingController(text: "");
     var _password = TextEditingController(text: "");
+    var _confirmPassword = TextEditingController(text: "");
+    var _identicalPasswords = true;
+
+    Column _buildBottomConfirm(){
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Please confirm your password below:',
+              style: TextStyle(fontSize: 17)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _confirmPassword,
+            obscureText: true,
+            decoration: InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Password',
+              errorText: _identicalPasswords ? null : 'Passwords must match',
+            ),
+          ),
+          Padding(padding: const EdgeInsets.all(15.0),
+            child: ElevatedButton(
+              onPressed: () async {
+                if(_password.text == _confirmPassword.text){
+                  user.signUp(_email.text, _password.text);
+                  Navigator.pop(context);
+                  Navigator.pop(context);
+                }
+                else{
+                  setState(() {
+                    _identicalPasswords = false;
+                    FocusManager.instance.primaryFocus?.unfocus();
+                  });
+                }
+              },
+              child: const Text('Confirm'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(350, 42),
+                shape: const StadiumBorder(),
+                primary: Colors.blue,
+                onPrimary: Colors.white,
+              ),
+            ),
+          )
+        ],
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -299,7 +482,7 @@ class _LoginScreenState extends State<LoginScreen>{
               labelText: 'Password',
             ),
           ),
-          const SizedBox(height: 35),
+          const SizedBox(height: 25),
           user.status == Status.Authenticating?
           const Center(child: CircularProgressIndicator()):
           Padding(padding: const EdgeInsets.all(10.0),
@@ -322,6 +505,35 @@ class _LoginScreenState extends State<LoginScreen>{
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.all(5.0),
+            child: ElevatedButton(
+              onPressed: () async {
+                showModalBottomSheet(context: context,
+                    isScrollControlled: true,
+                    builder: (context){
+                      return AnimatedPadding(
+                        padding: MediaQuery.of(context).viewInsets,
+                        duration: const Duration(milliseconds: 50),
+                        curve: Curves.decelerate,
+                        child: Container(
+                          height: 200,
+                          color: Colors.white,
+                          child: _buildBottomConfirm(),
+                        ),
+                      );
+                    }
+                );
+              },
+              child: const Text('New user? Click to sign up'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(350, 42),
+                shape: const StadiumBorder(),
+                primary: Colors.blue,
+                onPrimary: Colors.white,
+              ),
+            ),
+          )
         ],
       ),
     );
