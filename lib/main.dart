@@ -400,10 +400,11 @@ class _LoginScreenState extends State<LoginScreen>{
     final user = Provider.of<AuthRepository>(context);
     var _email = TextEditingController(text: "");
     var _password = TextEditingController(text: "");
-    var _confirmPassword = TextEditingController(text: "");
-    var _identicalPasswords = true;
+    var _samePass = true;
+    var _confirmPass = TextEditingController(text: "");
+    
 
-    Column _buildBottomConfirm(){
+    Column _buildConfirm(){
       return Column(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         mainAxisSize: MainAxisSize.min,
@@ -412,25 +413,25 @@ class _LoginScreenState extends State<LoginScreen>{
               style: TextStyle(fontSize: 17)),
           const SizedBox(height: 10),
           TextField(
-            controller: _confirmPassword,
+            controller: _confirmPass,
             obscureText: true,
             decoration: InputDecoration(
               border: OutlineInputBorder(),
               labelText: 'Password',
-              errorText: _identicalPasswords ? null : 'Passwords must match',
+              errorText: _samePass ? null : 'Passwords must match',
             ),
           ),
           Padding(padding: const EdgeInsets.all(15.0),
             child: ElevatedButton(
               onPressed: () async {
-                if(_password.text == _confirmPassword.text){
+                if(_password.text == _confirmPass.text){
                   user.signUp(_email.text, _password.text);
                   Navigator.pop(context);
                   Navigator.pop(context);
                 }
                 else{
                   setState(() {
-                    _identicalPasswords = false;
+                    _samePass = false;
                     FocusManager.instance.primaryFocus?.unfocus();
                   });
                 }
