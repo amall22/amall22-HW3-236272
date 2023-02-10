@@ -1,14 +1,136 @@
-import 'package:english_words/english_words.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:english_words/english_words.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:snapping_sheet/snapping_sheet.dart';
-import 'statemanage.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
+enum Status { Uninitialized, Authenticated, Authenticating, Unauthenticated }
+
+class AuthRepository with ChangeNotifier {
+  FirebaseAuth _auth;
+  User? _user;
+  Status _status = Status.Uninitialized;
+
+  AuthRepository.instance() : _auth = FirebaseAuth.instance {
+    _auth.authStateChanges().listen(_onAuthStateChanged);
+    _user = _auth.currentUser;
+    _onAuthStateChanged(_user);
+  }
+
+  Status get status => _status;
+
+  User? get user => _user;
+  bool get isAuthenticated => status == Status.Authenticated;
+
+  var _saved = <WordPair>{};
+
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  FirebaseStorage _storage = FirebaseStorage.instance;
+
+  Future<UserCredential?> signUp(String email, String password) async {
+    try {
+      _status = Status.Authenticating;
+      notifyListeners();
+      return await _auth.createUserWithEmailAndPassword(
+          email: email, password: password);
+    } catch (e) {
+      _status = Status.Unauthenticated;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<bool> signIn(String email, String password) async {
+    try {
+      _status = Status.Authenticating;
+      notifyListeners();
+      await _auth.signInWithEmailAndPassword(email: email, password: password);
+      _saved = await getPairs();
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _status = Status.Unauthenticated;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future signOut() async {
+    _auth.signOut();
+    _status = Status.Unauthenticated;
+    notifyListeners();
+    return Future.delayed(Duration.zero);
+  }
+
+  Future<void> _onAuthStateChanged(User? firebaseUser) async {
+    if (firebaseUser == null) {
+      _user = null;
+      _status = Status.Unauthenticated;
+    } else {
+      _user = firebaseUser;
+      _status = Status.Authenticated;
+    }
+    notifyListeners();
+  }
+
+  Future<void> addPair(String pair, String part1, String part2) async{
+    if(_status == Status.Authenticated){
+      await _db.collection("users").doc(_user!.uid).collection("saved").doc(pair.toString()).set(
+          {'first': part1, 'second': part2});
+      _saved = await getPairs();
+      notifyListeners();
+    }
+
+  }
+
+  Future<void> removePair(String pair) async{
+    if(_status == Status.Authenticated){
+      await _db.collection("users").doc(_user!.uid).collection("saved").doc(pair.toString()).delete();
+      _saved = await getPairs();
+      notifyListeners();
+    }
+  }
+
+  Future<Set<WordPair>> getPairs() async{
+    Set<WordPair> res = {};
+
+    await _db.collection("users").doc(_user!.uid).collection('saved').get()
+        .then((querySnapshot) {
+      querySnapshot.docs.forEach((result) {
+        res.add(WordPair(result.data().entries.first.value.toString(), result.data().entries.last.value.toString()));
+      });
+    });
+    return Future<Set<WordPair>>.value(res);
+  }
+
+  Future<void> uploadImage(File file) async{
+    await _storage.ref('images').child(_user!.uid).putFile(file);
+    notifyListeners();
+  }
+  Future<String> downloadImage() async{
+    try {
+      return await _storage.ref('images').child(_user!.uid).getDownloadURL();
+    } on Exception catch(e){
+      return "https://firebasestorage.googleapis.com/v0/b/hellome-7d8cb.appspot.com/o/images%2Fno-profile-picture.png?alt=media&token=2e30255e-a76f-4802-b4e8-2ae6bd6fba44";
+    }
+
+  }
+  String? getEmail() {
+    return _user!.email;
+  }
+
+  Set<WordPair> getSaved() {
+    return _saved;
+  }
+
+}
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(App());
@@ -16,7 +138,6 @@ void main() {
 
 class App extends StatelessWidget {
   final Future<FirebaseApp> _initialization = Firebase.initializeApp();
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
@@ -29,36 +150,38 @@ class App extends StatelessWidget {
                       textDirection: TextDirection.ltr)));
         }
         if (snapshot.connectionState == ConnectionState.done) {
-          return const MyApp();
+          return MyApp();
         }
-        return const Center(child: CircularProgressIndicator());
+        return Center(
+            child: CircularProgressIndicator());
       },
     );
   }
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+
     return ChangeNotifierProvider(create: (_) => AuthRepository.instance(),
-        child: MaterialApp(
-          title: 'Startup Name Generator',
-          initialRoute: '/',
-          routes: {
-            '/': (context) => const RandomWords(),
-            '/login': (context) => const LoginScreen(),
-            '/favorite': (context) => const RandomWords(),
-          },
-          theme: ThemeData(
-            appBarTheme: const AppBarTheme(
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.deepPurple,
-            ),
+      child: MaterialApp(
+        title: 'Startup Name Generator',
+        initialRoute: '/',
+        routes: {
+          '/': (context) => const RandomWords(),
+          '/login': (context) => LoginScreen(),
+          '/favorites': (context) => const RandomWords(),
+        },
+        theme: ThemeData(
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.deepPurple,
           ),
-        ));
+        ),
+      )
+    );
   }
 }
 
@@ -71,16 +194,16 @@ class RandomWords extends StatefulWidget {
 
 class _RandomWordsState extends State<RandomWords> {
   final _suggestions = <WordPair>[];
-  final _localSaved = <WordPair>{};
+  final _Fav = <WordPair>{};
   var _cloudSaved = <WordPair>{};
   final _biggerFont = const TextStyle(fontSize: 18);
-  SnappingSheetController sheetController = SnappingSheetController();
   var user;
   var canBeDragged = true;
+  SnappingSheetController sheetController = SnappingSheetController();
 
   Widget _buildRow(WordPair pair) {
-    final alreadySaved = _localSaved.contains(pair) || (user.isAuthenticated && _cloudSaved.contains(pair));
-    if(_localSaved.contains(pair) && !_cloudSaved.contains(pair)){
+    final alreadySaved = _Fav.contains(pair) || (user.isAuthenticated && _cloudSaved.contains(pair));
+    if(_Fav.contains(pair) && !_cloudSaved.contains(pair)){
       user.addPair(pair.toString(), pair.first, pair.second);
     }
     return ListTile(
@@ -96,18 +219,40 @@ class _RandomWordsState extends State<RandomWords> {
       onTap: () {      // NEW lines from here...
         setState(() {
           if (alreadySaved) {
-            _localSaved.remove(pair);
+            _Fav.remove(pair);
             user.removePair(pair.toString());
             _cloudSaved = user.getSaved();
-
           } else {
-            _localSaved.add(pair);
+            _Fav.add(pair);
             user.addPair(pair.toString(), pair.first, pair.second);
             _cloudSaved = user.getSaved();
           }
         });
       },
     );
+  }
+
+
+  Future<bool> confirm(wp) async{
+    bool to_delete = false;
+    var button_style = ElevatedButton.styleFrom(primary: Colors.deepPurple, onPrimary: Colors.white);
+    await showDialog(context: context, builder: (_) {
+      return AlertDialog(title: const Text("Delete Suggestion"),
+        content: Text("Are you sure you want to delete $wp from your saved suggestions?"),
+        actions: [
+          TextButton(onPressed: () {
+            to_delete = true;
+            Navigator.of(context).pop();},
+              style: button_style,
+              child: const Text("Yes")),
+          TextButton(onPressed: () {
+            Navigator.of(context).pop();},
+              style: button_style,
+              child: const Text("No")),
+        ],
+      );
+    });
+    return to_delete;
   }
 
   Widget _buildSuggestions() {
@@ -126,25 +271,10 @@ class _RandomWordsState extends State<RandomWords> {
     );
   }
 
-  Future<bool> confirm(wp) async{
-    bool toDelete = false;
-    var buttonStyle = ElevatedButton.styleFrom(primary: Colors.deepPurple, onPrimary: Colors.white);
-    await showDialog(context: context, builder: (_) {
-      return AlertDialog(title: const Text("Delete Suggestion"),
-        content: Text("Are you sure you want to delete $wp from your saved suggestions?"),
-        actions: [
-          TextButton(onPressed: () { toDelete = true; Navigator.of(context).pop();}, style: buttonStyle,child: const Text("Yes")),
-          TextButton(onPressed: () { Navigator.of(context).pop();}, style: buttonStyle,child: const Text("No")),
-        ],
-      );
-    });
 
-    return toDelete;
-  }
-
-  
-  void _pushSaved() {
+  void _pushFav() {
     Navigator.of(context).push(
+      // Add lines from here...
       MaterialPageRoute<void>(
         builder: (context) {
           user = Provider.of<AuthRepository>(context);
@@ -154,7 +284,7 @@ class _RandomWordsState extends State<RandomWords> {
           else{
             _cloudSaved.clear();
           }
-          var completeSet = _localSaved.union(_cloudSaved);
+          var completeSet = _Fav.union(_cloudSaved);
           final myTiles = completeSet.map((WordPair wp) {
             return Dismissible(key: UniqueKey(),
               confirmDismiss: (dir) async {
@@ -162,7 +292,7 @@ class _RandomWordsState extends State<RandomWords> {
               },
               onDismissed: (dir) {
                 setState(() {
-                  _localSaved.remove(wp);
+                  _Fav.remove(wp);
                   _cloudSaved.remove(wp);
                   user.removePair(wp.toString());
                 });
@@ -189,22 +319,22 @@ class _RandomWordsState extends State<RandomWords> {
               )
               ,);
           });
+
           final divided = myTiles.isNotEmpty ?
           ListTile.divideTiles(
             context: context,
             tiles:myTiles,
           ).toList()
               : <Widget>[];
-
           return Scaffold(
-            appBar: AppBar(
-              title: const Text('Saved Suggestions', style: TextStyle(color: Colors.white)),
-              backgroundColor: Colors.deepPurple,
-              iconTheme: const IconThemeData(
-                color: Colors.white, //change your color here
-              ),
-            ),
-            body: ListView(children: divided,),
+          appBar: AppBar(
+          title: const Text('Saved Suggestions', style: TextStyle(color: Colors.white)),
+          backgroundColor: Colors.deepPurple,
+          iconTheme: const IconThemeData(
+          color: Colors.white, //change your color here
+          ),
+          ),
+          body: ListView(children: divided,),
           );
         },
       ),
@@ -212,16 +342,17 @@ class _RandomWordsState extends State<RandomWords> {
 
   }
 
+
   void _goToLogin(){
     Navigator.pushNamed(context, '/login');
   }
-  Future<void> _logout() async {
-    _localSaved.clear();
+
+  Future<void> _logout() async{
+    _Fav.clear();
     _cloudSaved.clear();
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully logged out')));
     await user.signOut();
   }
-
   Container _displayPersonalInfo(){
     return Container(
       color: Colors.white,
@@ -248,10 +379,10 @@ class _RandomWordsState extends State<RandomWords> {
                   future: user.downloadImage(),
                   builder: (BuildContext context, AsyncSnapshot<String> snapshot) {
                     return CircleAvatar(
-                      radius: 50.0,
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.purple,
-                      backgroundImage: snapshot.data != null ? NetworkImage(snapshot.data.toString()): null
+                        radius: 50.0,
+                        backgroundColor: Colors.deepPurple,
+                        foregroundColor: Colors.purple,
+                        backgroundImage: snapshot.data != null ? NetworkImage(snapshot.data.toString()): null
                     );
                   },
                 ),
@@ -357,7 +488,7 @@ class _RandomWordsState extends State<RandomWords> {
                 canBeDragged = true;
                 sheetController
                     .snapToPosition(const SnappingPosition.factor(
-              positionFactor: 0.265,
+                  positionFactor: 0.265,
                 ));
               }
             })
@@ -371,7 +502,7 @@ class _RandomWordsState extends State<RandomWords> {
           IconButton(
             icon: const Icon(Icons.star),
             color: Colors.white,
-            onPressed: _pushSaved,
+            onPressed: _pushFav,
             tooltip: 'Saved Suggestions',
           ),
           IconButton(
@@ -387,24 +518,26 @@ class _RandomWordsState extends State<RandomWords> {
   }
 }
 
-class LoginScreen extends StatefulWidget{
+
+
+
+class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
-class _LoginScreenState extends State<LoginScreen>{
 
+class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final user = Provider.of<AuthRepository>(context);
     var _email = TextEditingController(text: "");
     var _password = TextEditingController(text: "");
-    var _samePass = true;
-    var _confirmPass = TextEditingController(text: "");
-    
+    var _confirm_Password = TextEditingController(text: "");
+    var _identical_Passwords = true;
 
-    Column _buildConfirm(){
+    Column _buildBottomConfirm(){
       return Column(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         mainAxisSize: MainAxisSize.min,
@@ -413,25 +546,25 @@ class _LoginScreenState extends State<LoginScreen>{
               style: TextStyle(fontSize: 17)),
           const SizedBox(height: 10),
           TextField(
-            controller: _confirmPass,
+            controller: _confirm_Password,
             obscureText: true,
             decoration: InputDecoration(
               border: OutlineInputBorder(),
               labelText: 'Password',
-              errorText: _samePass ? null : 'Passwords must match',
+              errorText: _identical_Passwords ? null : 'Passwords must match',
             ),
           ),
           Padding(padding: const EdgeInsets.all(15.0),
             child: ElevatedButton(
               onPressed: () async {
-                if(_password.text == _confirmPass.text){
+                if(_password.text == _confirm_Password.text){
                   user.signUp(_email.text, _password.text);
                   Navigator.pop(context);
                   Navigator.pop(context);
                 }
                 else{
                   setState(() {
-                    _samePass = false;
+                    _identical_Passwords = false;
                     FocusManager.instance.primaryFocus?.unfocus();
                   });
                 }
@@ -448,6 +581,7 @@ class _LoginScreenState extends State<LoginScreen>{
         ],
       );
     }
+
 
     return Scaffold(
       appBar: AppBar(
@@ -483,7 +617,7 @@ class _LoginScreenState extends State<LoginScreen>{
               labelText: 'Password',
             ),
           ),
-          const SizedBox(height: 25),
+          const SizedBox(height: 35),
           user.status == Status.Authenticating?
           const Center(child: CircularProgressIndicator()):
           Padding(padding: const EdgeInsets.all(10.0),
@@ -505,26 +639,18 @@ class _LoginScreenState extends State<LoginScreen>{
                 onPrimary: Colors.white,
               ),
             ),
+
           ),
-          Padding(
-            padding: const EdgeInsets.all(5.0),
+          Padding(padding: const EdgeInsets.all(10.0),
             child: ElevatedButton(
               onPressed: () async {
-                showModalBottomSheet(context: context,
-                    isScrollControlled: true,
-                    builder: (context){
-                      return AnimatedPadding(
-                        padding: MediaQuery.of(context).viewInsets,
-                        duration: const Duration(milliseconds: 50),
-                        curve: Curves.decelerate,
-                        child: Container(
-                          height: 200,
-                          color: Colors.white,
-                          child: _buildBottomConfirm(),
-                        ),
-                      );
-                    }
-                );
+                if (await user.signUp(_email.text, _password.text) == null) {
+                  const snackBar = SnackBar(content: Text('There was an error logging into the app'));
+                  ScaffoldMessenger.of(context).showSnackBar(snackBar);
+                }
+                else {
+                  Navigator.pop(context);
+                }
               },
               child: const Text('New user? Click to sign up'),
               style: ElevatedButton.styleFrom(
@@ -534,7 +660,8 @@ class _LoginScreenState extends State<LoginScreen>{
                 onPrimary: Colors.white,
               ),
             ),
-          )
+
+          ),
         ],
       ),
     );
